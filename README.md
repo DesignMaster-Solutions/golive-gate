@@ -64,27 +64,25 @@ timings: investigator 232 s, judge 355 s wall time on a free model, publish appr
 
 ## What We Learned
 
-1. **Read-only tools still ask for confirmation.** With the default `action_policy`
-   (`default_action: require_confirm`, `allow_read_only_without_prompt: true`), a `@tool(idempotent=True,
-   tags=("read_only",), capabilities=("read_only", ...))` still returns `"openminion: Policy confirmation required
-   ... reply yes"` as the agent's text. With `output_type` set this surfaces as an `AgentOutputValidationError`
-   whose input is that policy message, which is confusing. Expected: SDK tools that declare `read_only` run without a
-   prompt, or the policy message is raised as its own error type instead of being parsed as model output.
-2. **The first request of every turn hides the user tools.** It carries only `submit_output`, with a tool-calling
-   contract that lists no tools; replayed alone against `openai/gpt-oss-120b`, the model answers "the inspection tools
-   are not available" (`tools/measure_prompt.py` dumps that request). In the full loop the tools are requested in
-   later iterations, so one three-tool turn costs several provider round trips (391 s on a paced free tier), which
-   is what drives finding 3. We also register the tool manifests (the workaround another builder documented for
-   0.1.4); on 0.1.14 our tools were reached with and without it, so we cannot claim it is needed.
-3. **A single turn is too big for an 8k tokens/min free tier.** After a first `submit_output`-only call (sent three
-   times), the main turn sends ~17k characters of system prompt plus eight built-in tools (`tool.request`, `respond`,
-   `coding`, `plan`, `research`, `decompose`, `clarify`, `review.diff`), even for an `Agent` with no tools of ours.
-   Groq answered `413 Request too large ... Requested 8683` on `openai/gpt-oss-120b`. Turning off
-   `auto_fact_extraction` in the agent profile and `max_tokens` on the provider did not change the request.
-   There is also no pacing for free-tier providers. One investigator turn makes several provider calls back to back; on
-   Groq's free tier (8k tokens/min for `openai/gpt-oss-120b`) that is a 429 on the second or third call, and the SDK's
-   own retry (`max_retries: 2`, `backoff_ms: 300`) is far shorter than the 60 s window. A `tokens_per_minute`
-   knob on the connection would make free tiers usable. A single oversized request returns HTTP 413 from Groq.
+1. **Read-only tools still ask for confirmation, unless `min_scope="READ_ONLY"` is declared.** With the default
+   `action_policy`, a `@tool(idempotent=True, tags=("read_only",), capabilities=("read_only", ...))` still returns
+   `"openminion: Policy confirmation required ... reply yes"` as the agent's text, because the decorator default
+   `min_scope="WRITE_SAFE"` wins over the tags (same root cause as openminion#464). With `output_type` set this
+   surfaces as an `AgentOutputValidationError` whose input is the policy message, which is confusing; a distinct
+   error type for a held tool call would make it obvious.
+2. **The first request of every turn is the memory extractor, and it carries the whole agent prompt.** That call
+   exposes only `submit_output` (schema `UserMessageCandidateReport`) plus the agent's full system prompt (~4.9k
+   characters, here "call plugin.golive.inspect_home ..."), so a model replaying it alone answers "the inspection
+   tools are not available". We first read it as the main turn hiding our tools. It is auto fact extraction, and it
+   is switched off with a top-level `"brain": {"auto_fact_extraction": {"enabled": false}}` in `agents.json`
+   (verified offline with `tools/measure_prompt.py`: the `submit_output` call disappears); putting the flag inside
+   the agent profile does nothing. On a paced free tier it is one extra round trip per turn.
+3. **A single turn is too big for an 8k tokens/min free tier.** The main turn sends ~17k characters of system prompt
+   plus eight built-in tools (`tool.request`, `respond`, `coding`, `plan`, `research`, `decompose`, `clarify`,
+   `review.diff`) when `Agent(tools=...)` is left at its default. Groq answered `413 Request too large ...
+   Requested 8683` on `openai/gpt-oss-120b`. There is also no pacing for free-tier providers: the SDK's own retry
+   (`max_retries: 2`, `backoff_ms: 300`) is far shorter than a 60 s rate window. A `tokens_per_minute` knob on the
+   connection would make free tiers usable.
 4. **`output_type` is not enforced on the model.** The judge answered a markdown table prefixed with
    `openminion: `; the SDK's JSON recovery found nothing to recover. A JSON schema placed at the end of `instructions`
    had no effect; the same schema inside the user message worked on the first try.
