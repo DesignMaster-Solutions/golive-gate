@@ -8,6 +8,8 @@ We build and host websites for small businesses in the US and Brazil. Every laun
 robots.txt that does not lock out AI search crawlers). We used to check it by hand. Go-Live Gate turns
 that checklist into a repeatable agent run.
 
+Demo video (2 min): https://youtu.be/tVH-x62QV3I
+
 ## Workflow
 
 ```
